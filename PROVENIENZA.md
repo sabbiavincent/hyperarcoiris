@@ -12,7 +12,7 @@ Origine: `sabbiavincent/hyperclouds`, commit `24d2ac2` (copia, il repository di 
 | `js/coords.js` | identico |
 | `calibration/` | identico |
 | `tests/test.mjs` | test 5d reso condizionale finché `js/app.js` non esiste |
-| `tests/package.json` | identico |
+| `tests/package.json` | aggiunto lo script `npm test` |
 
 Il pannello di assistenza GPS (in hyperclouds dentro `js/app.js` e `index.html`) è estratto in `js/gps.js` di questo repository.
 
