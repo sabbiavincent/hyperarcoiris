@@ -21,7 +21,7 @@ function mockOpenMeteo(route) {
   const lats = q.get('latitude').split(','), lons = q.get('longitude').split(',');
   const start = Date.parse(q.get('start_date') + 'T00:00:00Z') / 1000;
   const time = Array.from({ length: 72 }, (_, k) => start + k * 3600);
-  const oLat = +lats[0], oLon = +lons[0];
+  const oLat = GPS.latitude, oLon = GPS.longitude;   // centro fisso: le richieste della zona arrivano a blocchi
   const loc = (i) => {
     // pioggia a est dell'osservatore (dove sta l'antisolare nel pomeriggio), cielo sgombro altrove
     const east = +lons[i] > oLon + 0.02 && Math.abs(+lats[i] - oLat) < 0.25;
@@ -63,6 +63,29 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME || '/
   check('pulsante +1′', (await page.textContent('#tTime')) === '15:01');
   await page.screenshot({ path: `${SHOTS}/1-telefono-15h.png`, fullPage: true });
 
+  // zona entro 20 km
+  await page.waitForFunction(() => /oggi:/.test(document.getElementById('answerText').textContent), null, { timeout: 60000 });
+  const ans = await page.textContent('#answerText');
+  check('risposta sintetica per la zona (oggi)', /oggi: (PROBABILI|POSSIBILI|IMPROBABILI|meteo della zona non disponibile)/.test(ans), ans.replace(/\n/g, ' | '));
+  if (!LIVE) check('scenario simulato: arcobaleni probabili nella zona con punto migliore', /PROBABILI/.test(ans) && /migliore:/.test(ans));
+  const nSpots = await page.$$eval('#spots div', (l) => l.length);
+  if (nSpots === 0) check('nessun punto consigliato: messaggio esplicito', /Nessun punto/.test(await page.textContent('#spots')));
+  else {
+    const first = await page.textContent('#spots div');
+    check('elenco dei punti consigliati (≤ 5)', nSpots <= 5, first);
+    await page.selectOption('#rank', 'vicino');
+    const firstNear = await page.textContent('#spots div');
+    check('ordinamento «più vicino» cambia l\'elenco', firstNear !== first || nSpots === 1, firstNear);
+  }
+  await page.screenshot({ path: `${SHOTS}/1b-zona.png`, fullPage: true });
+  await page.click('#tomorrowBtn');
+  await page.waitForFunction(() => /domani:/.test(document.getElementById('answerText').textContent), null, { timeout: 60000 });
+  check('domani: risposta sintetica senza nuova richiesta della zona', /domani:/.test(await page.textContent('#answerText')));
+  await page.click('#todayBtn');
+  await page.waitForFunction(() => /oggi:/.test(document.getElementById('answerText').textContent), null, { timeout: 60000 });
+  await page.evaluate(() => { const s = document.getElementById('slider'); s.value = 900; s.dispatchEvent(new Event('input')); });
+  await page.waitForTimeout(400);
+
   // registro: salva, elenca, esporta CSV
   await page.click('#logBox summary');
   await page.click('#lgUseSlider');
@@ -84,7 +107,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME || '/
   check('nessuno scorrimento orizzontale su 412 px', ov[0] <= ov[1], ov.join(' ≤ '));
   check('nessun errore JavaScript', errors.length === 0, errors.slice(0, 3).join(' / '));
   const calls = await page.evaluate(() => JSON.parse(localStorage.getItem('hc.calls') || 'null'));
-  check('contatore Open-Meteo condiviso aggiornato', calls && calls.n >= 217, JSON.stringify(calls));
+  check('contatore Open-Meteo condiviso aggiornato (punto 217 + zona 681)', calls && calls.n >= 898, JSON.stringify(calls));
   await ctx.close();
 }
 

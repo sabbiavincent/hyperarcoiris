@@ -10,6 +10,7 @@ import { fetchFrames, loadFrame, loadCoverage, mosaicFor, latLonToPx, meanMotion
 import { evaluate, daySeries } from './likelihood.js';
 import { setupGps } from './gps.js';
 import * as Log from './log.js';
+import * as Zone from './zonescan.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -27,6 +28,8 @@ const S = {
   h0: null, hc: null, hcKey: null, field: null, fieldKey: null, fieldTime: 0, fieldErr: null,
   radar: null, radarErr: null, series: [], minute: 720, loadId: 0, t0: 0,
   mapStyle: store.get('mapStyle', 'chiara'), radarOn: store.get('radarOn', true), ev: null,
+  zone: { center: store.get('zoneCenter', null), cells: null, cellsKey: null, region: null, regionKey: null, series: [], err: null },
+  rank: store.get('rank', 'indice'), scope: store.get('scope', 'giorno'),
 };
 
 // ---------- utilità ----------
@@ -59,7 +62,14 @@ $('hag').value = S.hag;
 $('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); loadWeather(S.loadId, true); };
 $('date').onchange = () => { S.date = $('date').value; load({ keepMeta: true }); };
 $('hag').onchange = () => { S.hag = Math.max(0, +$('hag').value || 0); store.set('hag', S.hag); S.hcKey = null; load({ keepMeta: true }); };
-$('reload').onclick = () => { S.fieldKey = null; load({ keepMeta: true }); };
+$('reload').onclick = () => { S.fieldKey = null; S.zone.regionKey = null; load({ keepMeta: true }); };
+const shiftDay = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+$('todayBtn').onclick = () => { S.date = todayIn(S.tz); load({ keepMeta: true, toNow: true }); };
+$('tomorrowBtn').onclick = () => { S.date = shiftDay(todayIn(S.tz), 1); load({ keepMeta: true }); };
+$('rank').value = S.rank; $('scope').value = S.scope;
+$('rank').onchange = () => { S.rank = $('rank').value; store.set('rank', S.rank); renderSpots(); };
+$('scope').onchange = () => { S.scope = $('scope').value; store.set('scope', S.scope); renderSpots(); };
+$('recenter').onclick = () => { S.zone.center = { ...S.obs }; store.set('zoneCenter', S.zone.center); loadZone(S.loadId); };
 let raf = false;
 const setMinute = (m) => {
   S.minute = Math.max(0, Math.min(1439, Math.round(m)));
@@ -77,13 +87,13 @@ $('timeline').addEventListener('click', (e) => {
   const r = e.currentTarget.getBoundingClientRect();
   setMinute(((e.clientX - r.left) / r.width) * 1440);
 });
-const gps = setupGps({ $, status, onPosition: (p) => setObserver(p) });
+const gps = setupGps({ $, status, onPosition: (p) => setObserver(p, true) });
 $('coordForm').onsubmit = (e) => {
   e.preventDefault();
   const c = parseCoords($('coordIn').value);
   if (!c || Math.abs(c.lat) > 90 || Math.abs(c.lon) > 180) return status('Coordinate non riconosciute: usa "43.7696, 11.2558" oppure "43°46\'10"N 11°15\'21"E".');
   $('coordIn').blur();
-  setObserver(c);
+  setObserver(c, true);
 };
 $('radarBtn').onclick = () => { S.radarOn = !S.radarOn; store.set('radarOn', S.radarOn); updateRadarLayer(); };
 window.addEventListener('resize', () => { renderTimeline(); renderDynamic(); });
@@ -101,12 +111,15 @@ map.once('idle', () => document.querySelector('.maplibregl-ctrl-attrib')?.classL
 let mapReady = false;
 const empty = { type: 'FeatureCollection', features: [] };
 map.on('style.load', () => {
-  for (const id of ['sector', 'sun', 'anti', 'obs']) map.addSource(id, { type: 'geojson', data: empty });
+  for (const id of ['zoneHeat', 'zoneEdge', 'sector', 'sun', 'anti', 'obs', 'spots']) map.addSource(id, { type: 'geojson', data: empty });
+  map.addLayer({ id: 'zoneHeat', type: 'fill', source: 'zoneHeat', paint: { 'fill-color': ['step', ['get', 'I'], '#39424f', 0.08, '#f5a524', 0.25, '#57d68d'], 'fill-opacity': ['case', ['<', ['get', 'I'], 0.02], 0, ['min', 0.6, ['+', 0.25, ['get', 'I']]]] } });
+  map.addLayer({ id: 'zoneEdge', type: 'line', source: 'zoneEdge', paint: { 'line-color': '#c77dff', 'line-width': 1.2, 'line-dasharray': [3, 2] } });
   map.addLayer({ id: 'sector', type: 'fill', source: 'sector', paint: { 'fill-color': '#7cc4ff', 'fill-opacity': 0.22 } });
   map.addLayer({ id: 'sectorEdge', type: 'line', source: 'sector', paint: { 'line-color': '#7cc4ff', 'line-width': 1, 'line-opacity': 0.7 } });
   map.addLayer({ id: 'sun', type: 'line', source: 'sun', paint: { 'line-color': '#f5a524', 'line-width': 2.5 } });
   map.addLayer({ id: 'anti', type: 'line', source: 'anti', paint: { 'line-color': '#c77dff', 'line-width': 2.5, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'obs', type: 'circle', source: 'obs', paint: { 'circle-radius': 5, 'circle-color': '#fff', 'circle-stroke-color': '#000', 'circle-stroke-width': 1.5 } });
+  map.addLayer({ id: 'spots', type: 'symbol', source: 'spots', layout: { 'text-field': ['get', 'n'], 'text-size': 13, 'text-font': ['Noto Sans Bold'], 'text-allow-overlap': true }, paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.5 } });
   mapReady = true;
   updateRadarLayer();
   renderMap();
@@ -124,6 +137,7 @@ function lineFeature(az, d) {
 function renderMap() {
   if (!mapReady) return;
   map.getSource('obs').setData({ type: 'Feature', geometry: { type: 'Point', coordinates: [S.obs.lon, S.obs.lat] } });
+  renderZoneMap();
   const ev = S.ev;
   if (!ev || !ev.sunUp) { for (const id of ['sector', 'sun', 'anti']) map.getSource(id).setData(empty); return; }
   map.getSource('sun').setData(lineFeature(ev.sun.az, 25000));
@@ -158,14 +172,15 @@ function updateRadarLayer() {
 }
 
 // ---------- osservatore e caricamento ----------
-function setObserver(c) {
+function setObserver(c, recenter = false) {
   S.obs = { lat: +c.lat.toFixed(5), lon: +c.lon.toFixed(5) };
   store.set('obs', S.obs);
+  if (recenter) { S.zone.center = { ...S.obs }; store.set('zoneCenter', S.zone.center); }
   map.easeTo({ center: [S.obs.lon, S.obs.lat] });
-  load();
+  load({ recenter });
 }
 
-async function load({ keepMeta = false, toNow = false } = {}) {
+async function load({ keepMeta = false, toNow = false, recenter = false } = {}) {
   const id = ++S.loadId;
   $('coords').textContent = `${S.obs.lat.toFixed(4)}, ${S.obs.lon.toFixed(4)}`;
   if (!keepMeta || S.elev == null) {
@@ -193,7 +208,99 @@ async function load({ keepMeta = false, toNow = false } = {}) {
   }
   progress(1);
   recompute();
-  await Promise.all([loadWeather(id), S.date === todayIn(S.tz) ? loadRadar(id) : (S.radar = null)]);
+  if (!S.zone.center) { S.zone.center = { ...S.obs }; store.set('zoneCenter', S.zone.center); }
+  await Promise.all([loadWeather(id), S.date === todayIn(S.tz) ? loadRadar(id) : (S.radar = null), loadZone(id)]);
+}
+
+// ---------- zona entro 20 km ----------
+async function loadZone(id) {
+  const Z = S.zone, c = Z.center;
+  const ckey = `${c.lat},${c.lon},${S.hag}`;
+  try {
+    if (Z.cellsKey !== ckey) {
+      Z.cells = null; Z.series = []; renderZone();
+      $('zoneInfo').textContent = 'terreno della zona…';
+      await dem.prefetch(Zone.demPoints(c));
+      if (id !== S.loadId) return;
+      Z.cells = Zone.cellHorizons(dem, c, Zone.zoneCells(c), S.hag);
+      Z.cellsKey = ckey;
+    }
+    const inRange = Z.region && S.date > Z.region.dateFrom && S.date < Z.region.dateTo;
+    const rkey = `${c.lat},${c.lon},${S.model}`;
+    if (!(Z.regionKey === rkey && inRange && Date.now() - Z.regionTime < 3 * 3600000)) {
+      $('zoneInfo').textContent = 'meteo della zona (681 punti)…';
+      Z.region = await Zone.fetchRegion(c, S.date, S.model);
+      if (id !== S.loadId) return;
+      Z.regionKey = rkey; Z.regionTime = Date.now(); Z.err = null;
+      showCalls();
+    }
+  } catch (e) {
+    if (id !== S.loadId) return;
+    Z.err = e.message; Z.region = Z.regionKey ? Z.region : null;
+  }
+  rescanZone();
+}
+function rescanZone() {
+  const Z = S.zone;
+  if (!Z.cells) return;
+  const ok = Z.region && S.date > Z.region.dateFrom && S.date < Z.region.dateTo;
+  Z.series = Zone.scanDay({ center: Z.center, cells: Z.cells, region: ok ? Z.region : null, radar: S.date === todayIn(S.tz) ? S.radar : null }, S.t0, S.t0 + 86400000, 15);
+  renderZone();
+}
+const ZONE_WORD = { probabile: 'PROBABILI', possibile: 'POSSIBILI, con riserva', improbabile: 'IMPROBABILI' };
+function renderZone() {
+  const Z = S.zone, box = $('answer');
+  const day = S.date === todayIn(S.tz) ? 'oggi' : S.date === shiftDay(todayIn(S.tz), 1) ? 'domani' : S.date;
+  if (!Z.cells) { $('answerText').textContent = 'Calcolo in corso…'; box.className = 'panel'; return; }
+  const v = Zone.verdict(Z.series);
+  if (!v.cls || (!v.best && !v.unknown && !Z.series.some((x) => x.possible))) {
+    if (v.cls) { $('answerText').textContent = `${day}: arcobaleno geometricamente impossibile (Sole sempre sotto l'orizzonte o troppo alto).`; box.className = 'panel'; }
+    else $('answerText').textContent = `${day}: ` + (Z.err ? `meteo della zona non disponibile (${Z.err}).` : 'meteo della zona in caricamento…');
+    box.className = 'panel';
+  } else {
+    const best = Zone.rankSpots(Z.cells, Z.series, { mode: 'indice', n: 1 })[0];
+    const win = v.windows.map((w) => `${formatLocal(w.start, S.tz)}–${formatLocal(w.end, S.tz)}`).join(', ');
+    $('answerText').textContent = `${day}: ${ZONE_WORD[v.cls.key]}` + (win ? ` · ${win}` : '') +
+      (best && v.cls.key !== 'improbabile' ? `\nmigliore: ${(best.cell.dist / 1000).toFixed(0)} km ${card(best.cell.az)} alle ${formatLocal(best.t, S.tz)} (indice ${best.I.toFixed(2)})` : '');
+    box.className = 'panel ' + v.cls.key;
+  }
+  const src = [...new Set(Z.series.map((s) => s.src).filter(Boolean))].join(', ');
+  $('zoneInfo').textContent = `centro ${Z.center.lat.toFixed(3)}, ${Z.center.lon.toFixed(3)}${src ? ' · ' + src : ''}`;
+  renderSpots();
+  renderTimeline();
+  renderZoneMap();
+}
+let spotList = [];
+function renderSpots() {
+  const Z = S.zone;
+  if (!Z.cells || !Z.series.length) { $('spots').replaceChildren(); spotList = []; renderZoneMap(); return; }
+  spotList = Zone.rankSpots(Z.cells, Z.series, { mode: S.rank, atT: S.scope === 'cursore' ? tAt(S.minute) : null });
+  if (!spotList.length) { $('spots').textContent = 'Nessun punto con indice almeno «possibile».'; renderZoneMap(); return; }
+  $('spots').replaceChildren(...spotList.map((p, i) => {
+    const d = document.createElement('div');
+    d.innerHTML = `<b>${i + 1}.</b> ${(p.cell.dist / 1000).toFixed(0)} km ${card(p.cell.az)} · <b>${formatLocal(p.t, S.tz)}</b> (finestra ${formatLocal(p.from, S.tz)}–${formatLocal(p.to, S.tz)}) · guarda a ${Math.round(p.look)}° ${card(p.look)} · sommità ${p.top.toFixed(0)}° · indice <b>${p.I.toFixed(2)}</b>`;
+    d.onclick = () => {
+      S.minute = Math.round((p.t - S.t0) / 60000); $('slider').value = S.minute;
+      setObserver({ lat: p.cell.lat, lon: p.cell.lon });
+    };
+    return d;
+  }));
+  renderZoneMap();
+}
+function renderZoneMap() {
+  if (!mapReady) return;
+  const Z = S.zone;
+  if (!Z.cells || !Z.center) { for (const id of ['zoneHeat', 'zoneEdge', 'spots']) map.getSource(id).setData(empty); return; }
+  const P = Zone.projector(Z.center), h = Zone.CELL / 2;
+  const step = Z.series.length ? Z.series.reduce((a, b) => (Math.abs(b.t - tAt(S.minute)) < Math.abs(a.t - tAt(S.minute)) ? b : a)) : null;
+  map.getSource('zoneHeat').setData({ type: 'FeatureCollection', features: Z.cells.map((c, k) => {
+    const q = [[-h, -h], [h, -h], [h, h], [-h, h], [-h, -h]].map(([dx, dy]) => { const ll = P.toLL(c.x + dx, c.y + dy); return [ll.lon, ll.lat]; });
+    const I = step ? step.I[k] : NaN;
+    return { type: 'Feature', properties: { I: isNaN(I) ? 0 : I }, geometry: { type: 'Polygon', coordinates: [q] } };
+  }) });
+  const ring = []; for (let a = 0; a <= 360; a += 6) { const d = destination(Z.center.lat, Z.center.lon, Zone.ZONE_RADIUS, a); ring.push([d.lon, d.lat]); }
+  map.getSource('zoneEdge').setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: ring } });
+  map.getSource('spots').setData({ type: 'FeatureCollection', features: spotList.map((p, i) => ({ type: 'Feature', properties: { n: String(i + 1) }, geometry: { type: 'Point', coordinates: [p.cell.lon, p.cell.lat] } })) });
 }
 
 async function loadWeather(id, force = false) {
@@ -236,6 +343,7 @@ async function loadRadar(id) {
   }
   updateRadarLayer();
   recompute();
+  rescanZone();
 }
 
 const ctx = () => ({ obs: S.obs, h0: S.h0, hc: S.hc, field: S.field, radar: S.radar, step: 3 });
@@ -256,7 +364,7 @@ function renderTimeline() {
   const { ctx: g, w, h } = setupCanvas(c);
   g.clearRect(0, 0, w, h);
   const x = (min) => (min / 1440) * w;
-  const rows = [[2, 16], [20, 12], [34, 24]];
+  const rows = [[2, 16], [20, 12], [34, 24], [62, 14]];
   g.fillStyle = '#0d121a'; for (const [y, hh] of rows) g.fillRect(0, y, w, hh);
   for (const e of S.series) {
     const m = (e.t - S.t0) / 60000, x0 = x(m), x1 = x(m + 10) + 0.5;
@@ -271,12 +379,19 @@ function renderTimeline() {
       if (e.source?.startsWith('radar')) { g.fillStyle = '#7cc4ff'; g.fillRect(x0, rows[2][0] + rows[2][1] - 2, x1 - x0, 2); }
     }
   }
+  for (const z of Zone.zoneMax(S.zone.series)) {
+    if (z.max == null || z.max < 0.02) continue;
+    const m = (z.t - S.t0) / 60000;
+    g.fillStyle = CLS_COLOR[z.max >= 0.25 ? 'probabile' : z.max >= 0.08 ? 'possibile' : 'improbabile'];
+    const hh = Math.max(2, rows[3][1] * Math.min(1, z.max / 0.5));
+    g.fillRect(x(m), rows[3][0] + rows[3][1] - hh, x(m + 15) - x(m) + 0.5, hh);
+  }
   g.fillStyle = '#8b98a8'; g.font = '9px ui-monospace, monospace'; g.textAlign = 'center';
-  for (let hr = 0; hr <= 24; hr += 3) { g.fillRect(x(hr * 60), 60, 1, 4); if (hr > 0 && hr < 24) g.fillText(String(hr), x(hr * 60), 74); }
+  for (let hr = 0; hr <= 24; hr += 3) { g.fillRect(x(hr * 60), 78, 1, 4); if (hr > 0 && hr < 24) g.fillText(String(hr), x(hr * 60), 92); }
   g.textAlign = 'left'; g.fillStyle = '#6b7788';
-  g.fillText('geometria', 3, 13); g.fillText('rilievo', 3, 29); g.fillText('indice', 3, 46);
-  if (S.date === todayIn(S.tz)) { const n = (Date.now() - S.t0) / 60000; g.fillStyle = '#e6edf3'; g.fillRect(x(n), 0, 1, 60); }
-  g.fillStyle = '#f5a524'; g.fillRect(x(S.minute) - 1, 0, 2, 62);
+  g.fillText('geometria', 3, 13); g.fillText('rilievo', 3, 29); g.fillText('indice', 3, 46); g.fillText('zona', 3, 72);
+  if (S.date === todayIn(S.tz)) { const n = (Date.now() - S.t0) / 60000; g.fillStyle = '#e6edf3'; g.fillRect(x(n), 0, 1, 78); }
+  g.fillStyle = '#f5a524'; g.fillRect(x(S.minute) - 1, 0, 2, 80);
 }
 
 // ---------- istante corrente ----------
@@ -297,7 +412,7 @@ function renderDynamic() {
     lines.push(`Geometria: primario possibile, sommità ${fmtDeg(PRIMARY.outer - ev.sun.el)}, base sull'orizzonte a ${fmtDeg(norm360(ev.anti.az - hw), 0)}–${fmtDeg(norm360(ev.anti.az + hw), 0)}${ev.geo.secondary ? `; secondario sommità ${fmtDeg(SECONDARY.outer - ev.sun.el)}` : ''}.`);
     lines.push(`Terreno: ${pct(ev.skyFraction)} dell'arco con cielo dietro, ${pct(ev.frontFraction)} davanti a rilievi${!ev.sunClearOfTerrain ? '; Sole dietro il rilievo (orizzonte ' + fmtDeg(ev.sunTerrain) + ')' : ''}.`);
     if (ev.S == null && !S.field) lines.push(`Meteo: ${S.fieldErr ? 'non disponibile (' + S.fieldErr + ')' : 'in caricamento'}.`);
-    else lines.push(`Sole libero S ${pct(ev.S)} · nubi sopra di te O ${pct(ev.O)} · pioggia nel settore R ${pct(ev.R)} (${ev.source || '—'}).`);
+    else lines.push(`Sole libero S ${pct(ev.S)} · cielo libero sopra di te O ${pct(ev.O)} · pioggia nel settore R ${pct(ev.R)} (${ev.source || '—'}).`);
     lines.push(ev.I == null ? 'Indice non calcolabile: mancano i dati meteo.' : `Indice ${ev.I.toFixed(2)}: ${ev.cls.label.toUpperCase()} (euristico, non tarato).`);
   }
   if (S.radar && t > S.radar.frames.at(-1).t + 5 * 60000 && t - S.radar.frames.at(-1).t <= MAX_LEAD_MIN * 60000 && S.radar.motion)
@@ -310,7 +425,7 @@ function renderDynamic() {
   renderTimelineCursor();
 }
 let lastCursor = -1;
-function renderTimelineCursor() { if (lastCursor !== S.minute) { lastCursor = S.minute; renderTimeline(); } }
+function renderTimelineCursor() { if (lastCursor !== S.minute) { lastCursor = S.minute; renderTimeline(); if (S.scope === 'cursore') renderSpots(); else renderZoneMap(); } }
 
 // ---------- panorama ----------
 const LAMBDAS = [400, 440, 480, 520, 560, 600, 640, 680, 700];

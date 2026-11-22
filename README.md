@@ -4,6 +4,7 @@ Web app personale: quando e dove si può vedere un arcobaleno, a qualsiasi ora d
 File statici, nessun server: funziona su GitHub Pages. Moduli verificati copiati da `hyperclouds` (vedi `PROVENIENZA.md`).
 
 ## Che cosa fa
+0. Dove andare: punti entro 20 km (linea d'aria) da cui si vede un arcobaleno, oggi o domani, ordinabili per indice, vicinanza o altezza dell'arco; risposta sintetica in testa alla pagina.
 1. Barra della giornata: possibilità geometrica (primario, solo secondario), occultamento da rilievo, indice euristico per classi.
 2. Panorama antisolare con orizzonte reale e archi primario e secondario nelle posizioni esatte; cursore al minuto.
 3. Mappa: direzione del Sole e antisolare, settore della pioggia utile, radar RainViewer, GPS con pannello di assistenza, coordinate manuali.
@@ -18,6 +19,7 @@ File statici, nessun server: funziona su GitHub Pages. Moduli verificati copiati
 | `js/rainfield.js` | griglia polare Open-Meteo (217 punti, peso 217 per aggiornamento) |
 | `js/radar.js` | RainViewer: frame osservati, tavolozza, copertura, moto, estrapolazione fino a 60 min |
 | `js/likelihood.js` | indice euristico I = S × O × R |
+| `js/zonescan.js` | ricerca nella zona: celle di 2 km, griglia meteo di 681 punti (oggi e domani in una richiesta), orizzonte per cella, ordinamenti |
 | `js/log.js` | registro osservazioni |
 | `js/gps.js` | pannello GPS (da hyperclouds) |
 
