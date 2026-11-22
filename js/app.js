@@ -39,12 +39,16 @@ const fmtDeg = (x, d = 1) => (x == null || !isFinite(x) ? '—' : (x >= 0 ? '' :
 const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 const todayIn = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
 const status = (s) => { $('status').textContent = s; };
+// spiegazione del limite Open-Meteo raggiunto (per IP: con i dati mobili l'IP è spesso condiviso tra molti utenti)
+const limitHint = (m) => /Daily/i.test(m) ? `${m} — limite giornaliero per indirizzo IP: con i dati mobili l'operatore condivide lo stesso IP tra molti utenti, che consumano anche il tuo limite; riprova con il Wi-Fi o domani.`
+  : /Hourly/i.test(m) ? `${m} — limite orario per indirizzo IP; riprova più tardi o con un'altra rete.`
+  : /Minutely/i.test(m) ? `${m} — limite al minuto; riprova tra un minuto.` : m;
 const progress = (f) => { $('bar').style.width = `${Math.round(f * 100)}%`; if (f >= 1) setTimeout(() => ($('bar').style.width = '0'), 400); };
 const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
 const card = (az) => CARD[Math.round(norm360(az) / 45) % 8];
 function showCalls() {
   const n = callCount(), el = $('calls');
-  el.textContent = `Chiamate Open-Meteo oggi da questo dispositivo, condivise con hyperclouds (stima): ${n} su ${DAILY_LIMIT} (il limite è per rete). Un aggiornamento completo pesa 217.`;
+  el.textContent = `Chiamate Open-Meteo oggi da questo dispositivo, condivise con hyperclouds (stima): ${n} su ${DAILY_LIMIT} (il limite è per rete). Un aggiornamento completo pesa 433 (zona; il punto ne è ricavato), 217 in più per un punto fuori zona.`;
   el.classList.toggle('warn', n > 0.8 * DAILY_LIMIT);
 }
 function setupCanvas(c) {
@@ -59,7 +63,7 @@ const tAt = (minute) => S.t0 + minute * 60000;
 // ---------- controlli ----------
 MODELS.forEach((m) => $('model').add(new Option(m.label, m.id, false, m.id === S.model)));
 $('hag').value = S.hag;
-$('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); loadWeather(S.loadId, true); };
+$('model').onchange = () => { S.model = $('model').value; store.set('model', S.model); S.fieldKey = null; S.zone.regionKey = null; load({ keepMeta: true }); };
 $('date').onchange = () => { S.date = $('date').value; load({ keepMeta: true }); };
 $('hag').onchange = () => { S.hag = Math.max(0, +$('hag').value || 0); store.set('hag', S.hag); S.hcKey = null; load({ keepMeta: true }); };
 $('reload').onclick = () => { S.fieldKey = null; S.zone.regionKey = null; load({ keepMeta: true }); };
@@ -209,7 +213,8 @@ async function load({ keepMeta = false, toNow = false, recenter = false } = {}) 
   progress(1);
   recompute();
   if (!S.zone.center) { S.zone.center = { ...S.obs }; store.set('zoneCenter', S.zone.center); }
-  await Promise.all([loadWeather(id), S.date === todayIn(S.tz) ? loadRadar(id) : (S.radar = null), loadZone(id)]);
+  // prima la zona: se il punto vi rientra, il suo campo si ricava da lì senza un'altra richiesta (limite di 600 al minuto)
+  await Promise.all([loadZone(id).then(() => loadWeather(id)), S.date === todayIn(S.tz) ? loadRadar(id) : (S.radar = null)]);
 }
 
 // ---------- zona entro 20 km ----------
@@ -228,15 +233,15 @@ async function loadZone(id) {
     const inRange = Z.region && S.date > Z.region.dateFrom && S.date < Z.region.dateTo;
     const rkey = `${c.lat},${c.lon},${S.model}`;
     if (!(Z.regionKey === rkey && inRange && Date.now() - Z.regionTime < 3 * 3600000)) {
-      $('zoneInfo').textContent = 'meteo della zona (681 punti)…';
-      Z.region = await Zone.fetchRegion(c, S.date, S.model);
+      $('zoneInfo').textContent = 'meteo della zona (433 punti)…';
+      Z.region = await Zone.fetchRegion(c, S.date, S.model, { onWait: (s) => { $('zoneInfo').textContent = `attendo ${s} s (limite al minuto)…`; } });
       if (id !== S.loadId) return;
       Z.regionKey = rkey; Z.regionTime = Date.now(); Z.err = null;
       showCalls();
     }
   } catch (e) {
     if (id !== S.loadId) return;
-    Z.err = e.message; Z.region = Z.regionKey ? Z.region : null;
+    Z.err = limitHint(e.message); Z.region = Z.regionKey ? Z.region : null;
   }
   rescanZone();
 }
@@ -306,16 +311,25 @@ function renderZoneMap() {
 async function loadWeather(id, force = false) {
   const key = `${S.obs.lat},${S.obs.lon},${S.date},${S.model}`;
   if (!force && S.fieldKey === key && Date.now() - S.fieldTime < 30 * 60000) return;
+  const Z = S.zone;
+  const inZone = Z.region && Z.center && S.date > Z.region.dateFrom && S.date < Z.region.dateTo &&
+    Math.hypot(...Object.values(Zone.projector(Z.center).toXY(S.obs.lat, S.obs.lon))) <= 25000;
+  if (inZone && !force) {
+    S.field = Zone.polarFromRegion(Z.region, S.obs); S.fieldKey = key; S.fieldTime = Z.regionTime; S.fieldErr = null;
+    status(`Meteo: previsione, modello ${S.field.model}, ${S.field.note}.`);
+    recompute();
+    return;
+  }
   status('Meteo: griglia di 217 punti attorno a te (Open-Meteo)…');
   try {
-    const f = await fetchField(S.obs, S.date, S.model);
+    const f = await fetchField(S.obs, S.date, S.model, { onWait: (s) => status(`Attendo ${s} s: limite Open-Meteo di 600 chiamate al minuto…`) });
     if (id !== S.loadId) return;
     S.field = f; S.fieldKey = key; S.fieldTime = Date.now(); S.fieldErr = null;
     status(`Meteo: ${f.host}, modello ${f.model}${f.hasProb ? '' : ' (senza probabilità: si usa la quantità)'}${f.note ? ' · ' + f.note : ''}.`);
   } catch (e) {
     if (id !== S.loadId) return;
-    S.field = null; S.fieldErr = e.message;
-    status(`Meteo non disponibile: ${e.message}. Restano geometria e terreno.`);
+    S.field = null; S.fieldErr = limitHint(e.message);
+    status(`Meteo non disponibile: ${limitHint(e.message)} Restano geometria e terreno.`);
   }
   showCalls();
   recompute();
@@ -546,6 +560,7 @@ renderLog();
 // ---------- avvio ----------
 showCalls();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-load({ toNow: true });
-if (!hadObs) gps.locatePhone(true);
+// primo avvio: si attende il GPS (o il suo rifiuto) prima di scaricare, per non pagare due volte la zona
+if (hadObs) load({ toNow: true });
+else gps.locatePhone(true, () => load({ toNow: true }));
 setInterval(() => { if (!document.hidden && S.radar && S.date === todayIn(S.tz) && Date.now() - S.radar.loaded > 10 * 60000) loadRadar(S.loadId); }, 60000);

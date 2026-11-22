@@ -67,6 +67,8 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME || '/
   await page.waitForFunction(() => /oggi:/.test(document.getElementById('answerText').textContent), null, { timeout: 60000 });
   const ans = await page.textContent('#answerText');
   check('risposta sintetica per la zona (oggi)', /oggi: (PROBABILI|POSSIBILI|IMPROBABILI|meteo della zona non disponibile)/.test(ans), ans.replace(/\n/g, ' | '));
+  const fieldNote = await page.textContent('#status');
+  if (!LIVE) check('campo del punto ricavato dalla zona (nessuna richiesta da 217)', /ricavato dalla griglia della zona/.test(fieldNote), fieldNote);
   if (!LIVE) check('scenario simulato: arcobaleni probabili nella zona con punto migliore', /PROBABILI/.test(ans) && /migliore:/.test(ans));
   const nSpots = await page.$$eval('#spots div', (l) => l.length);
   if (nSpots === 0) check('nessun punto consigliato: messaggio esplicito', /Nessun punto/.test(await page.textContent('#spots')));
@@ -107,7 +109,8 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME || '/
   check('nessuno scorrimento orizzontale su 412 px', ov[0] <= ov[1], ov.join(' ≤ '));
   check('nessun errore JavaScript', errors.length === 0, errors.slice(0, 3).join(' / '));
   const calls = await page.evaluate(() => JSON.parse(localStorage.getItem('hc.calls') || 'null'));
-  check('contatore Open-Meteo condiviso aggiornato (punto 217 + zona 681)', calls && calls.n >= 898, JSON.stringify(calls));
+  const minute = await page.evaluate(() => JSON.parse(localStorage.getItem('ha.minute') || '[]'));
+  check('contatore aggiornato; mai oltre 550 in una finestra di 60 s', calls && calls.n >= 433 && minute.every(([t]) => minute.filter(([u]) => u >= t && u - t < 60000).reduce((a, [, w]) => a + w, 0) <= 550), `${JSON.stringify(calls)}, ultimo minuto ${minute.reduce((a, [, w]) => a + w, 0)}`);
   await ctx.close();
 }
 

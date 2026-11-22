@@ -2,12 +2,12 @@
 // Una pagina web non può accendere la localizzazione né aprire le impostazioni: si spiegano i passaggi.
 
 export function setupGps({ $, status, onPosition, host = 'sabbiavincent.github.io' }) {
-  function locatePhone(auto) {
-    if (!navigator.geolocation) { if (!auto) status('Geolocalizzazione non disponibile in questo browser.'); return; }
+  function locatePhone(auto, onFail) {
+    if (!navigator.geolocation) { if (!auto) status('Geolocalizzazione non disponibile in questo browser.'); onFail?.(); return; }
     if (!auto) status('Richiesta posizione GPS…');
     navigator.geolocation.getCurrentPosition(
       (p) => onPosition({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }),
-      (e) => { if (!auto) gpsHelp(e); },
+      (e) => { if (!auto) gpsHelp(e); onFail?.(); },
       { enableHighAccuracy: true, timeout: auto ? 8000 : 15000, maximumAge: 60000 });
   }
 

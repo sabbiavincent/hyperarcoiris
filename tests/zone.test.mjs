@@ -1,7 +1,8 @@
 // Ricerca nella zona (20 km): griglia, interpolazione, posizione dei punti consigliati rispetto alla pioggia.
 
 import { regionGrid, snapshot, valueXY, zoneCells, cellHorizons, scanAt, scanDay, verdict, rankSpots, projector, ZONE_RADIUS, MIN_SEP, fetchRegion } from '../js/zonescan.js';
-import { VARS, requestWeight } from '../js/rainfield.js';
+import { VARS, requestWeight, throttle, MINUTE_CAP, polarGrid } from '../js/rainfield.js';
+import { polarFromRegion } from '../js/zonescan.js';
 import { sunPosition, zonedDayStart } from '../js/solar.js';
 
 let fails = 0, passes = 0;
@@ -21,7 +22,7 @@ function synthRegion(fn) {
 // ---------- 1. Griglia e peso ----------
 {
   const pts = regionGrid(C), cells = zoneCells(C);
-  check('griglia meteo: 441 nodi a 4 km + 240 a 8 km = 681; peso 681 per oggi e domani', pts.length === 681 && requestWeight(pts.length, 4, VARS.length) === 681);
+  check('griglia meteo: 289 nodi a 5 km + 144 a 10 km = 433; peso 433 per oggi e domani (< 550 al minuto)', pts.length === 433 && requestWeight(pts.length, 4, VARS.length) === 433);
   check('celle osservatore di 2 km entro 20 km', cells.length > 300 && cells.every((c) => c.dist <= ZONE_RADIUS), `${cells.length} celle`);
   const P = projector(C), q = P.toXY(P.toLL(12345, -6789).lat, P.toLL(12345, -6789).lon);
   check('proiezione locale reversibile', Math.abs(q.x - 12345) < 1e-6 && Math.abs(q.y + 6789) < 1e-6);
@@ -32,8 +33,8 @@ function synthRegion(fn) {
   const R = synthRegion((v, p) => (v === 'cloud_cover_low' ? 50 + p.x / 2000 - p.y / 4000 : 0));
   const s = snapshot(R, R.times[30]);
   const f = (x, y) => 50 + x / 2000 - y / 4000;
-  const err = Math.max(...[[1234, -5678], [-39000, 39000], [55000, -20000], [-70000, 66000]].map(([x, y]) => Math.abs(valueXY(s, 'cloud_cover_low', x, y) - f(x, y))));
-  check('bilineare esatta su campo lineare, dentro ±40 km e fino a ±72 km', err < 1e-3, `Δ=${err.toExponential(1)}`);
+  const err = Math.max(...[[1234, -5678], [-39000, 39000], [55000, -20000], [-69000, 66000]].map(([x, y]) => Math.abs(valueXY(s, 'cloud_cover_low', x, y) - f(x, y))));
+  check('bilineare esatta su campo lineare, dentro ±40 km e fino a ±70 km', err < 1e-3, `Δ=${err.toExponential(1)}`);
 }
 
 // ---------- 3. Scenario: banda di pioggia fissa a 10 km a est del centro, cielo sereno ----------
@@ -89,8 +90,8 @@ const cells = zoneCells(C);
     const times = [0, 1, 2].map((k) => 1763769600 + k * 3600);
     return { ok: true, status: 200, json: async () => Array.from({ length: n }, () => ({ hourly: { time: times, ...Object.fromEntries(VARS.map((v) => [v, times.map(() => 1)])) } })) };
   };
-  const r = await fetchRegion(C, '2026-11-22', 'best_match', { fetchFn: fake });
-  check('fetchRegion: 681 punti in 5 richieste da ≤ 170, da ieri a dopodomani, contatore aggiornato', r.pts.length === 681 && r.data.precipitation.length === 681 && r.requests === 5 && r.dateFrom === '2026-11-21' && r.dateTo === '2026-11-24' && JSON.parse(localStorage.getItem('hc.calls')).n === 681);
+  const r = await fetchRegion(C, '2026-11-22', 'best_match', { fetchFn: fake, limit: false });
+  check('fetchRegion: 433 punti in 3 richieste da ≤ 150, da ieri a dopodomani, contatore aggiornato', r.pts.length === 433 && r.data.precipitation.length === 433 && r.requests === 3 && r.dateFrom === '2026-11-21' && r.dateTo === '2026-11-24' && JSON.parse(localStorage.getItem('hc.calls')).n === 433);
 }
 
 {
@@ -101,6 +102,28 @@ const cells = zoneCells(C);
   check('senza dati meteo: risposta «non disponibile», non «improbabile»', v.cls === null && v.unknown === true);
   const dry = verdict(scanDay({ center: C, cells, region: R0 }, t0, t0 + 24 * H, 15));
   check('con dati e senza pioggia: improbabile', dry.cls.key === 'improbabile' && dry.windows.length === 0);
+}
+
+// ---------- 7. Campo del punto ricavato dalla zona ----------
+{
+  const lin = (v, p) => (v === 'cloud_cover_low' ? 40 + p.x / 3000 + p.y / 5000 : v === 'precipitation_probability' ? null : 1);
+  const Rl = synthRegion(lin);
+  const obs = { lat: C.lat + 0.05, lon: C.lon - 0.08 };
+  const f = polarFromRegion(Rl, obs), P = projector(C);
+  let err = 0;
+  f.pts.forEach((p, i) => { const q = P.toXY(p.lat, p.lon); if (Math.abs(q.x) < 69000 && Math.abs(q.y) < 69000) err = Math.max(err, Math.abs(f.data.cloud_cover_low[i][10] - (40 + q.x / 3000 + q.y / 5000))); });
+  check('campo polare dalla zona: 217 punti, interpolazione esatta su campo lineare', f.pts.length === polarGrid(obs).length && err < 1e-6 && f.derived, `Δ=${err.toExponential(1)}`);
+}
+
+// ---------- 8. Limitatore al minuto ----------
+{
+  localStorage.setItem('ha.minute', JSON.stringify([[Date.now() - 59000, 500]]));
+  let waited = null; const t0 = Date.now();
+  await throttle(100, (s) => { waited = waited ?? s; });
+  const dt = Date.now() - t0;
+  check(`limitatore: 500 + 100 > ${MINUTE_CAP} → attesa fino all'uscita dalla finestra di 60 s`, waited != null && dt >= 900 && dt < 3000, `${dt} ms`);
+  const t1 = Date.now(); await throttle(100); 
+  check('limitatore: 100 + 100 ≤ 550 → nessuna attesa', Date.now() - t1 < 50);
 }
 
 console.log(`\n${passes} superati, ${fails} falliti`);

@@ -58,8 +58,8 @@ function synthField({ rain = () => 0, prob = null, low = () => 0, T = () => 10 }
     return { ok: true, status: 200, json: async () => pts.map(() => loc) };
   };
   globalThis.localStorage = { s: {}, getItem(k) { return this.s[k] ?? null; }, setItem(k, v) { this.s[k] = v; } };
-  const a = await fetchField(obs, '2026-11-22', 'icon_d2', { fetchFn: fake(false) });
-  const b = await fetchField(obs, '2026-11-22', 'icon_d2', { fetchFn: fake(true) });
+  const a = await fetchField(obs, '2026-11-22', 'icon_d2', { fetchFn: fake(false), limit: false });
+  const b = await fetchField(obs, '2026-11-22', 'icon_d2', { fetchFn: fake(true), limit: false });
   check('modello deterministico: nessuna probabilità; ripiego su best_match se fuori dominio', a.model === 'icon_d2' && !a.hasProb && b.model === 'best_match' && b.hasProb && /ripiego/.test(b.note));
   check('contatore condiviso hc.calls aggiornato (3 richieste × 217)', JSON.parse(localStorage.getItem('hc.calls')).n === 651);
 }

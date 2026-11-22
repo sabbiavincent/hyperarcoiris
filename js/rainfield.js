@@ -32,6 +32,24 @@ export const requestWeight = (nPts, days, nVars) => nPts * Math.ceil(days / 14) 
 
 // Contatore condiviso con hyperclouds (stessa chiave, stesso origin): il limite è per IP.
 const utcDay = () => new Date().toISOString().slice(0, 10);
+// Limitatore al minuto: Open-Meteo accetta 600 di peso al minuto per IP. Si tiene una finestra mobile di 60 s
+// (condivisa tra le schede dello stesso origin) e si attende se la richiesta la farebbe superare.
+export const MINUTE_CAP = 550;
+const MINUTE_KEY = 'ha.minute';
+const recent = () => { try { return (JSON.parse(localStorage.getItem(MINUTE_KEY) || '[]')).filter(([t]) => Date.now() - t < 60000); } catch { return []; } };
+export async function throttle(w, onWait) {
+  for (;;) {
+    const r = recent(), used = r.reduce((a, [, x]) => a + x, 0);
+    if (used + w <= MINUTE_CAP || !r.length) {
+      try { localStorage.setItem(MINUTE_KEY, JSON.stringify([...r, [Date.now(), w]])); } catch {}
+      return;
+    }
+    const wait = 60000 - (Date.now() - r[0][0]) + 250;
+    onWait?.(Math.ceil(wait / 1000));
+    await new Promise((res) => setTimeout(res, Math.min(wait, 5000)));
+  }
+}
+
 export function addCalls(w) {
   try {
     const c = JSON.parse(localStorage.getItem('hc.calls') || 'null');
@@ -71,7 +89,7 @@ async function getJson(url, fetchFn) {
  * Scarica il campo per il giorno locale dateStr (±1 giorno UTC). Se il modello scelto non copre tutti i punti
  * (fuori dominio), ripiega su best_match per l'intera griglia e lo segnala.
  */
-export async function fetchField(obs, dateStr, model = 'best_match', { fetchFn = fetch, now = Date.now() } = {}) {
+export async function fetchField(obs, dateStr, model = 'best_match', { fetchFn = fetch, now = Date.now(), limit = true, onWait } = {}) {
   const pts = polarGrid(obs);
   const ageDays = (now - Date.parse(dateStr + 'T00:00:00Z')) / 86400000;
   const host = ageDays > 60 ? HISTORICAL : FORECAST;
@@ -80,6 +98,7 @@ export async function fetchField(obs, dateStr, model = 'best_match', { fetchFn =
   for (const m of tries) {
     const q = buildQuery(pts, dateStr, m);
     try {
+      if (limit) await throttle(requestWeight(pts.length, 3, VARS.length), onWait);
       addCalls(requestWeight(pts.length, 3, VARS.length));
       j = await getJson(`${host}?${q}`, fetchFn);
       used = m; break;

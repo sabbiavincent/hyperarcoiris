@@ -6,14 +6,14 @@ import { sunPosition, SUN_SEMIDIAMETER } from './solar.js';
 import { elevationAngle, EARTH_R } from './geodesy.js';
 import { antisolar, sampleBow, PRIMARY } from './rainbow.js';
 import { rayClear } from './weather.js';
-import { VARS, requestWeight, addCalls, valueAtPoint } from './rainfield.js';
+import { VARS, requestWeight, addCalls, valueAtPoint, throttle, polarGrid } from './rainfield.js';
 import { cellRain, classify, radarRain } from './likelihood.js';
 import { radarAt, latLonToPx } from './radar.js';
 
 export const ZONE_RADIUS = 20000;
 export const CELL = 2000;
-export const INNER = { half: 40000, step: 4000 };
-export const OUTER = { half: 72000, step: 8000 };
+export const INNER = { half: 40000, step: 5000 };
+export const OUTER = { half: 70000, step: 10000 };   // multiplo del passo interno: i nodi coincidono
 export const RAIN_D = [2000, 5000, 9000, 14000, 20000];
 export const CLOUD_D = [0, 3000, 7000, 12000, 20000, 35000, 50000, 70000];
 export const HORIZON_D = (() => { const a = []; for (let d = 500; d < 2000; d += 100) a.push(d); for (let d = 2000; d <= 15000; d += 250) a.push(d); return a; })();
@@ -46,9 +46,9 @@ const FORECAST = 'https://api.open-meteo.com/v1/forecast';
 const shiftDate = (s, d) => { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
 
 /** Campo della zona da dateStr−1 a dateStr+2 (oggi e domani in una richiesta, stesso peso). */
-export const CHUNK = 170;   // punti per richiesta: oltre ~8 KB di URL il server risponde senza intestazioni CORS
+export const CHUNK = 150;   // punti per richiesta: oltre ~8 KB di URL il server risponde senza intestazioni CORS
 
-export async function fetchRegion(center, dateStr, model = 'best_match', { fetchFn = fetch } = {}) {
+export async function fetchRegion(center, dateStr, model = 'best_match', { fetchFn = fetch, limit = true, onWait } = {}) {
   const pts = regionGrid(center);
   const url = (m, part) => {
     const q = new URLSearchParams({
@@ -59,6 +59,7 @@ export async function fetchRegion(center, dateStr, model = 'best_match', { fetch
     return `${FORECAST}?${q}`;
   };
   const get = async (m, part) => {
+    if (limit) await throttle(requestWeight(part.length, 4, VARS.length), onWait);
     addCalls(requestWeight(part.length, 4, VARS.length));
     const r = await fetchFn(url(m, part)).catch((e) => ({ ok: false, status: 0, json: async () => ({ reason: e.message }) }));
     const body = await r.json().catch(() => null);
@@ -85,6 +86,48 @@ export async function fetchRegion(center, dateStr, model = 'best_match', { fetch
   return { center, dateFrom: shiftDate(dateStr, -1), dateTo: shiftDate(dateStr, 2), model: used, note, pts, times, data,
     hasProb: data.precipitation_probability.some((r) => r.some((x) => x != null)), weight: requestWeight(pts.length, 4, VARS.length),
     requests: Math.ceil(pts.length / CHUNK) };
+}
+
+// ---- campo del singolo punto ricavato dalla zona (evita la richiesta della griglia polare, peso 217) ----
+function indexMaps(region) {
+  if (region._idx) return region._idx;
+  const inner = new Map(), outer = new Map();
+  region.pts.forEach((p, k) => (p.g === 0 ? inner : outer).set(`${p.i},${p.j}`, k));
+  region._idx = { inner, outer };
+  return region._idx;
+}
+/** Nodi e pesi bilineari per il punto locale (x, y); fuori dal dominio si usa il bordo (±70 km). */
+export function regionWeights(region, x, y) {
+  const { inner, outer } = indexMaps(region);
+  const lim = OUTER.half;
+  x = Math.max(-lim, Math.min(lim - 1e-6, x)); y = Math.max(-lim, Math.min(lim - 1e-6, y));
+  const useInner = Math.abs(x) < INNER.half && Math.abs(y) < INNER.half;
+  const step = useInner ? INNER.step : OUTER.step;
+  const fx = x / step, fy = y / step, i = Math.floor(fx), j = Math.floor(fy), a = fx - i, b = fy - j;
+  const node = (ii, jj) => {
+    if (useInner) return inner.get(`${ii},${jj}`);
+    const X = ii * OUTER.step, Y = jj * OUTER.step;
+    if (Math.abs(X) <= INNER.half && Math.abs(Y) <= INNER.half) return inner.get(`${X / INNER.step},${Y / INNER.step}`);
+    return outer.get(`${ii},${jj}`);
+  };
+  return [[node(i, j), (1 - a) * (1 - b)], [node(i + 1, j), a * (1 - b)], [node(i, j + 1), (1 - a) * b], [node(i + 1, j + 1), a * b]];
+}
+/** Campo nel formato di rainfield.fetchField (griglia polare attorno a obs), interpolato dalla zona. */
+export function polarFromRegion(region, obs) {
+  const P = projector(region.center), pts = polarGrid(obs);
+  const data = {};
+  for (const v of VARS) data[v] = [];
+  for (const p of pts) {
+    const q = P.toXY(p.lat, p.lon), W = regionWeights(region, q.x, q.y);
+    for (const v of VARS) {
+      data[v].push(region.times.map((_, n) => {
+        let s = 0, ws = 0;
+        for (const [k, w] of W) { const val = k == null ? null : region.data[v][k][n]; if (val != null) { s += val * w; ws += w; } }
+        return ws > 0 ? s / ws : null;
+      }));
+    }
+  }
+  return { obs, model: region.model, note: 'ricavato dalla griglia della zona (nessuna richiesta in più)', host: 'previsione', pts, times: region.times, data, hasProb: region.hasProb, derived: true };
 }
 
 /** Istantanea del campo all'istante t: per ogni variabile due griglie regolari (interna, esterna). */

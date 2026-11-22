@@ -19,7 +19,7 @@ File statici, nessun server: funziona su GitHub Pages. Moduli verificati copiati
 | `js/rainfield.js` | griglia polare Open-Meteo (217 punti, peso 217 per aggiornamento) |
 | `js/radar.js` | RainViewer: frame osservati, tavolozza, copertura, moto, estrapolazione fino a 60 min |
 | `js/likelihood.js` | indice euristico I = S × O × R |
-| `js/zonescan.js` | ricerca nella zona: celle di 2 km, griglia meteo di 681 punti (oggi e domani in una richiesta), orizzonte per cella, ordinamenti |
+| `js/zonescan.js` | ricerca nella zona: celle di 2 km, griglia meteo di 433 punti (oggi e domani, stesso peso), campo del punto ricavato dalla zona, limitatore a 550/min, orizzonte per cella, ordinamenti |
 | `js/log.js` | registro osservazioni |
 | `js/gps.js` | pannello GPS (da hyperclouds) |
 
