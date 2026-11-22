@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>hyper arcoiris</title>
+<meta name="theme-color" content="#0b0f14">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121821; --line: #1f2733; --text: #e6edf3; --muted: #8b98a8;
+    --amber: #f5a524; --ember: #f0643c; --blue: #7cc4ff; --ok: #57d68d; --bad: #f2777a; --geo: #3b4a63;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  main { max-width: 780px; margin: 0 auto; }
+  #map { height: 34vh; min-height: 220px; position: relative; }
+  .hud { position: absolute; z-index: 2; top: 8px; left: 8px; right: 8px; display: flex; gap: 6px;
+    justify-content: space-between; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  .chip { background: rgba(11,15,20,.82); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px;
+    font: 12px var(--mono); color: var(--text); }
+  button, select, input, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 9px; }
+  button { cursor: pointer; }
+  button.primary { border-color: var(--amber); color: var(--amber); font-weight: 600; }
+  .panel { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+  canvas { display: block; width: 100%; touch-action: pan-y; }
+  #pano { height: 230px; }
+  #timeline { height: 78px; }
+  input[type=range] { width: 100%; accent-color: var(--amber); padding: 0; border: 0; background: transparent; height: 32px; }
+  .label { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+  .tele { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 4px 0; }
+  .tele div { text-align: center; }
+  .tele b { display: block; font: 600 15px var(--mono); }
+  #verdict { font: 13px var(--mono); padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; white-space: pre-line; }
+  #verdict.probabile { border-color: var(--ok); }
+  #verdict.possibile { border-color: var(--amber); }
+  .legend { font-size: 10px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .legend .li { white-space: nowrap; }
+  #gpsHelp { border: 1px solid var(--amber); }
+  #gpsHelp ol { margin: 6px 0; padding-left: 20px; }
+  [hidden] { display: none !important; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 0; }
+  details { font-size: 12px; }
+  details p, details li { color: var(--muted); }
+  details p { margin: .4em 0; }
+  details ol { padding-left: 20px; margin: .3em 0; }
+  #calls.warn { color: var(--bad); }
+  #status { font-size: 12px; color: var(--muted); min-height: 1.3em; }
+  .ttl { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px 2px; }
+  .ttl span:first-child { font-weight: 600; }
+  .bar { height: 3px; background: linear-gradient(90deg, var(--amber), var(--ember)); width: 0; transition: width .2s; }
+  .step { display: flex; gap: 4px; }
+  .step button { padding: 6px 8px; font: 12px var(--mono); }
+  #logForm label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  #logForm .row { margin: 4px 0; }
+  #logList { font: 12px var(--mono); color: var(--muted); max-height: 260px; overflow: auto; margin: 6px 0; }
+  #logList div { border-bottom: 1px solid var(--line); padding: 3px 0; display: flex; gap: 6px; justify-content: space-between; }
+  #logList button { padding: 1px 6px; font-size: 11px; }
+  table.sum { border-collapse: collapse; font: 12px var(--mono); color: var(--muted); }
+  table.sum td, table.sum th { border: 1px solid var(--line); padding: 2px 6px; }
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0 4px 4px 0; }
+  .maplibregl-ctrl-attrib.maplibregl-compact { min-height: 18px; padding: 0; background: rgba(11,15,20,.6); }
+  .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) .maplibregl-ctrl-attrib-inner { display: none; }
+  .maplibregl-ctrl-attrib.maplibregl-compact-show { padding: 2px 22px 2px 6px; font-size: 10px; background: rgba(255,255,255,.85); }
+  .maplibregl-ctrl-attrib-button { width: 18px !important; height: 18px !important; background-size: 14px !important;
+    background-position: center !important; opacity: .55; filter: invert(1); }
+  .maplibregl-compact-show .maplibregl-ctrl-attrib-button { filter: none; }
+</style>
+</head>
+<body>
+<main>
+  <div id="map">
+    <div class="hud">
+      <div class="chip" id="coords">—</div>
+      <span><button class="chip" id="radarBtn" title="Radar sulla mappa">Radar</button> <button class="chip" id="mapStyle" title="Mappa chiara/scura">☾</button> <button class="chip" id="gps" title="Usa la mia posizione">GPS</button></span>
+    </div>
+  </div>
+  <div class="legend" style="padding:3px 10px;background:var(--panel)"><span class="li"><i style="background:#f5a524"></i>direzione del Sole</span>  <span class="li"><i style="background:#c77dff"></i>direzione antisolare</span>  <span class="li"><i style="background:rgba(124,196,255,.5)"></i>settore della pioggia utile (1–20 km o fino al rilievo)</span>  <span id="radarAge"></span></div>
+  <div class="bar" id="bar"></div>
+  <div id="gpsHelp" class="panel" hidden>
+    <b id="gpsTitle"></b>
+    <ol id="gpsSteps"></ol>
+    <div class="row"><button class="primary" id="gpsRetry">Riprova</button><button id="gpsClose">Chiudi</button></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <input type="date" id="date">
+      <select id="model" class="grow"></select>
+    </div>
+    <form class="row" id="coordForm" style="margin-top:6px">
+      <input id="coordIn" class="grow" placeholder="43.7696, 11.2558  oppure  43°46'10&quot;N 11°15'21&quot;E" autocomplete="off">
+      <button type="submit">Vai</button>
+    </form>
+    <div class="row" style="margin-top:6px">
+      <label class="label" for="hag">Altezza sul suolo</label>
+      <input type="number" id="hag" value="2" min="0" max="3000" step="1" style="width:80px"> <span class="label">m</span>
+      <span class="grow"></span>
+      <button class="primary" id="reload">Ricalcola</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="ttl"><span>Giornata</span><span class="label" id="dayInfo"></span></div>
+  <div class="panel" style="border-top:0;padding-top:0">
+    <canvas id="timeline"></canvas>
+    <div class="legend"><span class="li"><i style="background:var(--geo)"></i>geometricamente possibile (primario)</span>  <span class="li"><i style="background:#2a3346"></i>solo secondario</span>  <span class="li"><i style="background:#5a2f33"></i>arco o Sole nascosti dal rilievo</span>  <span class="li"><i style="background:#57d68d"></i>probabile</span>  <span class="li"><i style="background:#f5a524"></i>possibile</span>  <span class="li"><i style="background:#39424f"></i>improbabile</span>  <span class="li"><i style="background:#7cc4ff"></i>fonte radar</span> </div>
+    <input type="range" id="slider" min="0" max="1439" value="720" aria-label="Ora">
+    <div class="row">
+      <div class="step"><button data-d="-60">−1 h</button><button data-d="-10">−10′</button><button data-d="-1">−1′</button></div>
+      <span class="grow" style="text-align:center"><button id="nowBtn">Adesso</button></span>
+      <div class="step"><button data-d="1">+1′</button><button data-d="10">+10′</button><button data-d="60">+1 h</button></div>
+    </div>
+    <div class="tele">
+      <div><span class="label">Ora</span><b id="tTime">—</b></div>
+      <div><span class="label">Sole</span><b id="tSun">—</b></div>
+      <div><span class="label">Antisolare</span><b id="tAnti">—</b></div>
+      <div><span class="label">Sommità</span><b id="tTop">—</b></div>
+    </div>
+    <div id="verdict">—</div>
+  </div>
+
+  <div class="ttl"><span>Panorama antisolare</span><span class="label" id="panoInfo"></span></div>
+  <canvas id="pano"></canvas>
+  <div class="legend" style="padding:3px 10px"><span>Proiezione cilindrica azimut/elevazione: posizioni esatte, archi deformati come in una panoramica.</span> <span class="li"><i style="background:#ff4d4d"></i>rosso</span> <span class="li"><i style="background:#7a4dff"></i>violetto</span> <span>primario rosso fuori, secondario invertito; banda di Alexander più scura; tacche in basso: pioggia stimata per direzione</span></div>
+
+  <div class="panel">
+    <details id="logBox">
+      <summary>Registro osservazioni</summary>
+      <p>Registra anche le assenze: un giorno con indice alto e nessun arcobaleno vale quanto un avvistamento. Ogni voce salva i valori calcolati dall'app per quell'istante e quel luogo (S, O, R, I, fonte). I dati restano in questo browser: esportali regolarmente.</p>
+      <form id="logForm">
+        <div class="row"><input type="datetime-local" id="lgT" step="60"><button type="button" id="lgUseSlider">Ora del cursore</button></div>
+        <div class="row">
+          <label><input type="radio" name="esito" value="visto" checked> visto</label>
+          <label><input type="radio" name="esito" value="non visto"> cercato, non visto</label>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="lgP" checked> primario</label>
+          <label><input type="checkbox" id="lgS"> secondario</label>
+          <label>arco visibile <input type="number" id="lgC" min="0" max="100" step="5" style="width:70px"> %</label>
+          <label>qualità <select id="lgQ"><option value="">—</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        </div>
+        <div class="row"><input id="lgN" class="grow" placeholder="Note (luogo, durata, foto…)" maxlength="500"></div>
+        <div class="row"><button class="primary" type="submit">Salva osservazione</button><span id="lgMsg" class="label"></span></div>
+      </form>
+      <div id="logList"></div>
+      <div id="logSum"></div>
+      <div class="row">
+        <button id="lgJson">Esporta JSON</button><button id="lgCsv">Esporta CSV</button>
+        <label class="label" style="cursor:pointer"><input type="file" id="lgImport" accept="application/json,.json" hidden><span style="border:1px solid var(--line);border-radius:8px;padding:6px 9px">Importa JSON</span></label>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>Che cosa è calcolato, che cosa è stimato, che cosa non si può determinare</summary>
+      <p><b>Calcolato (fisica, verificata con test numerici):</b></p>
+      <ol>
+        <li>Posizione apparente del Sole (NOAA, verificata contro VSOP87) e punto antisolare: azimut + 180°, elevazione opposta.</li>
+        <li>Raggi degli archi dall'ottica geometrica di Descartes, con l'indice dell'acqua IAPWS 1997 relativo all'aria (Edlén 1966): primario rosso 42,4°, violetto 40,5°; secondario rosso 50,3°, violetto 53,7°; bande allargate di ±0,27° dal disco solare. Verificati con un tracciamento indipendente dei raggi.</li>
+        <li>Posizione esatta degli archi in azimut ed elevazione, sommità a (raggio − elevazione del Sole), intersezione con l'orizzonte (cos Δ = cos ρ / cos h).</li>
+        <li>Orizzonte reale su 360° fino a 100 km (AWS Terrain Tiles, curvatura terrestre, rifrazione k = 0,13; esclusi i primi 500 m); tratti d'arco con cielo dietro, tratti davanti a un rilievo (visibili solo se la pioggia sta più vicina del rilievo), Sole dietro il terreno.</li>
+      </ol>
+      <p><b>Stimato (modelli e regole euristiche):</b></p>
+      <ol>
+        <li>S, Sole libero lungo il raggio: modello dei varchi di hyperclouds, P = exp(Σ ln(1−c)·Δd / 50 km), tarato su soleggiamento DWD con il Sole a 4–10°; sopra 10° è un'estrapolazione. Il raggio che illumina le gocce è approssimato con quello dell'osservatore.</li>
+        <li>O, osservatore non sotto nubi spesse verso il Sole: 1 − c⁴, c = copertura bassa/media entro 7 km verso il Sole. Regola scelta, non tarata.</li>
+        <li>R, pioggia liquida nel settore dell'arco: massimo tra le direzioni dell'arco visibile, cercando tra 1 e 20 km (o fino al rilievo). Dal modello: probabilità di precipitazione (solo con «Automatico», da ensemble) o, in mancanza, 1 − exp(−mm/0,2); neve sotto 0,5 °C, mista fino a 2,5 °C. Dal radar (solo oggi, ±10 min dall'ultimo frame): ≥ 15 dBZ (≈ 0,3 mm/h, Marshall–Palmer) conta 1, 5–15 dBZ conta 0,3.</li>
+        <li>Nowcast fino a +60 min: estrapolazione del radar con un vettore di moto costante stimato dagli ultimi frame (nessuna crescita o dissoluzione delle celle). Sperimentale; nessuna fonte gratuita e accessibile dal browser fornisce previsioni radar (RainViewer le ha sospese dal 1° gennaio 2026).</li>
+        <li>Indice I = S × O × R; classi: probabile ≥ 0,25, possibile 0,08–0,25. Soglie scelte, non tarate.</li>
+      </ol>
+      <p><b>Non determinabile in modo affidabile con questi dati:</b></p>
+      <ol>
+        <li>La posizione dei singoli rovesci: un modello a 2 km e passo orario sbaglia la collocazione delle celle convettive di distanze paragonabili all'intero settore utile (1–20 km); la probabilità da ensemble attenua, non risolve.</li>
+        <li>La dimensione delle gocce, che decide luminosità, larghezza e archi soprannumerari (sotto ~0,5 mm l'arco si sposta e sbiadisce; nebbia e pioviggine danno l'arco bianco).</li>
+        <li>Se il Sole illumina davvero le gocce lontane (ombra di nubi dal lato opposto a quello dell'osservatore).</li>
+        <li>Pioggia in quota che evapora prima del suolo: il radar la vede, l'arco può esserci, il modello al suolo no.</li>
+        <li>La probabilità vera: <b>l'indice è euristico, non validato empiricamente.</b> Non esiste un archivio osservativo trasferibile: Carlson et al. 2022 (Global Environmental Change) usano foto Flickr a scala climatologica giornaliera; il modello di ZhaoSu (Meteorological Applications, 2023) è locale e senza geometria. Il registro delle osservazioni serve a costruirne uno.</li>
+      </ol>
+      <p>Fonti: mappa © OpenStreetMap / OpenFreeMap / OpenMapTiles; terreno AWS Terrain Tiles; meteo Open-Meteo; radar © RainViewer (rainviewer.com).</p>
+      <p id="calls"></p>
+    </details>
+  </div>
+</main>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

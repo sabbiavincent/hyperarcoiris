@@ -120,9 +120,11 @@ function synthField({ rain = () => 0, prob = null, low = () => 0, T = () => 10 }
   wall.horizon.fill(60);                                   // terreno ovunque sopra l'arco
   for (const r of wall.rays) for (const s of r) s.h = s.d >= 2000 && s.d <= 2500 ? 5000 : 0;
   const e6 = evaluate({ obs, h0: 50, hc: wall, field: synthField({ rain: (p) => (p.d >= 3000 && near(p.az, anti) ? 2 : 0) }) }, t);
-  check('pioggia oltre un rilievo a 2 km (dietro il terreno) → R = 0', e6.R === 0 || e6.I === 0, `R=${e6.R}`);
+  check('pioggia oltre un rilievo a 2 km (dietro il terreno) → nessun contributo', !e6.R && !e6.I, `R=${e6.R}`);
   const night = evaluate(ctx(showerAnti), Date.UTC(2026, 10, 22, 22));
   check('notte: geometricamente impossibile', !night.geo.primary && night.I === 0, night.reason);
+  const nofield = evaluate({ obs, h0: 50, hc: flat, field: null }, t);
+  check('senza dati meteo: indice non calcolato (null), non zero', nofield.I === null && nofield.cls === null);
   check('probabilità da ensemble preferita alla quantità', cellRain({ prob: 40, mm: 5, T: 10 }) === 0.4 && Math.abs(cellRain({ prob: null, mm: 0.2, T: 10 }) - (1 - Math.exp(-1))) < 1e-12);
 }
 

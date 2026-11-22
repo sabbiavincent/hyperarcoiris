@@ -54,8 +54,8 @@ export function evaluate(ctx, t) {
     primary: sunUp && sun.el < PRIMARY.outer,
     secondary: sunUp && sun.el < SECONDARY.outer,
   };
-  const out = { t, sun, anti, sunUp, sunTerrain, sunClearOfTerrain, geo, S: null, O: null, R: null, I: 0, cls: classify(0), source: null, dirs: [] };
-  if (!geo.primary) { out.reason = sunUp ? 'Sole troppo alto' : 'Sole sotto l\'orizzonte'; return out; }
+  const out = { t, sun, anti, sunUp, sunTerrain, sunClearOfTerrain, geo, S: null, O: null, R: null, I: null, cls: null, source: null, dirs: [] };
+  if (!geo.primary) { out.reason = sunUp ? 'Sole troppo alto' : 'Sole sotto l\'orizzonte'; out.I = 0; out.cls = classify(0); return out; }
 
   // visibilità dell'arco contro il terreno
   const bow = sampleBow(anti, PRIMARY.mid, () => 0, ctx.step ?? 3);
@@ -63,11 +63,11 @@ export function evaluate(ctx, t) {
   out.skyFraction = bt.skyFraction; out.frontFraction = bt.frontFraction; out.astroFraction = bow.astroFraction;
   out.bowPoints = bt.points;
   const usable = bt.points.filter((p) => p.el >= 0 && (p.against === 'cielo' || p.dHit >= MIN_PATH));
-  if (!usable.length) { out.reason = 'arco interamente nascosto dal terreno'; return out; }
+  if (!usable.length) { out.reason = 'arco interamente nascosto dal terreno'; out.I = 0; out.cls = classify(0); return out; }
   out.possibleVisible = true;
 
   // S: Sole libero
-  if (!sunClearOfTerrain) { out.S = 0; out.reason = 'Sole dietro il terreno'; }
+  if (!sunClearOfTerrain) { out.S = 0; out.O = 0; out.reason = 'Sole dietro il terreno'; }
   else if (field) {
     const snap = cloudSnap(field, sun.az, t);
     out.S = rayClear(snap, h0, Math.max(sun.el, 0.5)).P;
@@ -105,8 +105,7 @@ export function evaluate(ctx, t) {
     if (pd != null) R = R == null ? pd : Math.max(R, pd);
   }
   out.R = R;
-  if (out.S != null && R != null) out.I = out.S * (out.O ?? 1) * R;
-  out.cls = classify(out.I);
+  if (out.S != null && R != null) { out.I = out.S * (out.O ?? 1) * R; out.cls = classify(out.I); }
   return out;
 }
 
