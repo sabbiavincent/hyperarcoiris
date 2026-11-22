@@ -4,7 +4,7 @@
   "description": "Test numerici",
   "main": "index.js",
   "scripts": {
-    "test": "node test.mjs && node rainbow.test.mjs"
+    "test": "node test.mjs && node rainbow.test.mjs && node horizon.test.mjs"
   },
   "keywords": [],
   "author": "",
